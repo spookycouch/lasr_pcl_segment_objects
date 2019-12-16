@@ -1,0 +1,8 @@
+float32 cluster_tolerance
+float32 non_planar_ratio
+---
+---
+Header header
+sensor_msgs/PointCloud2 cloud
+sensor_msgs/Image image
+Cluster[] clusters

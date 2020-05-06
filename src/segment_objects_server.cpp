@@ -1,4 +1,5 @@
 #include <ros/ros.h>
+#include <pcl_ros/point_cloud.h>
 #include <sensor_msgs/PointCloud2.h>
 
 #include <pcl_conversions/pcl_conversions.h>
@@ -11,8 +12,11 @@
 #include <pcl/sample_consensus/model_types.h>
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/segmentation/extract_clusters.h>
+#include <pcl/features/normal_3d.h>
+#include <pcl/filters/project_inliers.h>
 
 #include <jeff_segment_objects/Cluster.h>
+#include <jeff_segment_objects/Object.h>
 #include <jeff_segment_objects/SegmentObjects.h>
 
 // map inliers from a cloud filter to their root indices
@@ -111,8 +115,8 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
     pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
     std::vector<pcl::PointIndices> cluster_indices;
     ec.setClusterTolerance(req.cluster_tolerance);
-    ec.setMinClusterSize(100);
-    ec.setMaxClusterSize(25000);
+    ec.setMinClusterSize(req.min_cluster_size);
+    ec.setMaxClusterSize(req.max_cluster_size);
     ec.setSearchMethod(tree);
     ec.setInputCloud(cloud);
     ec.extract(cluster_indices);
@@ -120,12 +124,60 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
     // set response
     // for each PointIndices object, add all points to a Cluster
     // append the Cluster to response's clusters vector
+    pcl::PointCloud<pcl::PointXYZ>::Ptr  whole_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     for (std::vector<pcl::PointIndices>::const_iterator cluster_it = cluster_indices.begin (); cluster_it!= cluster_indices.end (); ++cluster_it)
     {
         jeff_segment_objects::Cluster cluster;
+        jeff_segment_objects::Object object;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr  cluster_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         for (std::vector<int>::const_iterator point_it = cluster_it->indices.begin (); point_it != cluster_it->indices.end (); ++point_it)
+        {
             cluster.indices.push_back(root_indices->indices[*point_it]);
+            cluster_cloud->points.push_back(cloud->points[*point_it]);
+            whole_cloud->points.push_back(cloud->points[*point_it]);
+        }
+        cluster_cloud->width = cluster_cloud->points.size();
+        cluster_cloud->height = 1;
+        cluster_cloud->is_dense = true;
 
+        whole_cloud->width = whole_cloud->points.size();
+        whole_cloud->height = 1;
+        whole_cloud->is_dense = true;
+
+        sensor_msgs::PointCloud2 whole;
+        pcl::toROSMsg(*cluster_cloud, object.cloud);
+        pcl::toROSMsg(*whole_cloud, whole);
+        object.cloud.header.frame_id = "base_footprint";
+        whole.header.frame_id = "base_footprint";
+        
+        // Calculate object center point
+        pcl::PointXYZ object_centroid;
+        pcl::computeCentroid(*cluster_cloud, object_centroid);
+        ROS_INFO_STREAM("This center of the object point is ");
+        ROS_INFO_STREAM(object_centroid);
+
+        // Put center in a PoseStamped
+        object.center.header.frame_id = "base_footprint";
+        object.center.pose.orientation.w = 1.0;
+        object.center.pose.position.x = object_centroid.x;
+        object.center.pose.position.y = object_centroid.y;
+        object.center.pose.position.z = object_centroid.z;
+
+        // Get width, height and depth of the object (depth as in thickness)
+        pcl::PointXYZ object_min, object_max;
+        pcl::getMinMax3D(*cluster_cloud, object_min, object_max);
+        ROS_INFO_STREAM(object_min);
+        ROS_INFO_STREAM(object_max);
+        ROS_INFO_STREAM("object width, height and depth: ");
+        object.width = std::abs(object_max.y - object_min.y);
+        object.height = std::abs(object_max.z - object_min.z);
+        object.depth = std::abs(object_max.x - object_min.x);
+        ROS_INFO_STREAM(object.width);
+        ROS_INFO_STREAM(object.height);
+        ROS_INFO_STREAM(object.depth);
+
+        res.whole = whole;
+        res.objects.push_back(object);
         res.clusters.push_back(cluster);
     }
     return true;

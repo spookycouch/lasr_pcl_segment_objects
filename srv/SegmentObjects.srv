@@ -1,5 +1,9 @@
 sensor_msgs/PointCloud2 cloud_msg
 float32 non_planar_ratio
 float32 cluster_tolerance
+float32 min_cluster_size
+float32 max_cluster_size
 ---
 Cluster[] clusters
+Object[] objects
+sensor_msgs/PointCloud2 whole

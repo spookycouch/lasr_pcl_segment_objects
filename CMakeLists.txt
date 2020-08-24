@@ -53,6 +53,7 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   Cluster.msg
+  Plane.msg
 )
 
 ## Generate services in the 'srv' folder
@@ -73,6 +74,7 @@ generate_messages(
   DEPENDENCIES
   sensor_msgs
   std_msgs
+  geometry_msgs
 )
 
 ################################################

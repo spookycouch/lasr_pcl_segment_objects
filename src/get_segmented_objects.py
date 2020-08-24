@@ -44,7 +44,7 @@ def callback(cloud_msg, image_msg):
                 
                 frame[row,col] = (0,255,0)
                 
-            cv2.rectangle(frame, (left, top), (right, bottom), (255, 255, 0), 1)
+            cv2.rectangle(frame, (left, top), (right, bottom), (255, 0, 0), 1)
             cv2.imshow('image', frame)
             cv2.waitKey(1)
     

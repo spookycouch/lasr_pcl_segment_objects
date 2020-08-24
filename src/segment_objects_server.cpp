@@ -1,4 +1,6 @@
 #include <ros/ros.h>
+#include <tf/transform_listener.h>
+#include <pcl_ros/transforms.h>
 #include <sensor_msgs/PointCloud2.h>
 
 #include <pcl_conversions/pcl_conversions.h>
@@ -11,9 +13,15 @@
 #include <pcl/sample_consensus/model_types.h>
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/segmentation/extract_clusters.h>
+#include <pcl/features/normal_3d.h>
+#include <pcl/filters/project_inliers.h>
 
 #include <jeff_segment_objects/Cluster.h>
+#include <jeff_segment_objects/Plane.h>
 #include <jeff_segment_objects/SegmentObjects.h>
+
+// transform listener to project objects onto base_footprint
+tf::TransformListener* listener;
 
 // map inliers from a cloud filter to their root indices
 // kept indices can thus be traced back to the root cloud after applying multiple filters
@@ -37,13 +45,16 @@ void mapInliersToRootIndices(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, pcl::Poi
 //
 bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_segment_objects::SegmentObjects::Response &res)
 {
-    
+    pcl::PointCloud<pcl::PointXYZ>::Ptr xtion_frame_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXYZ>::Ptr nan_filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointIndices::Ptr root_indices(new pcl::PointIndices);
+    std::vector<pcl::ModelCoefficients> plane_coefficients;
+
 
     // convert ros cloud_msg input 
-    pcl::fromROSMsg(req.cloud_msg, *cloud);
+    pcl::fromROSMsg(req.cloud_msg, *xtion_frame_cloud);
+    pcl_ros::transformPointCloud("/base_footprint", *xtion_frame_cloud, *cloud, *listener);
     int initial_size = cloud->size();
 
     std::vector<int> nan_indices;
@@ -67,6 +78,7 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
     // segment planes from cloud
     seg.setInputCloud(cloud);
     seg.segment(*inliers, *coefficients);
+    plane_coefficients.push_back(*coefficients);
     // filter the segmented plane from cloud
     pcl::ExtractIndices<pcl::PointXYZ> extract;
     extract.setInputCloud(cloud);
@@ -87,6 +99,7 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
         // segment planes from cloud
         seg.setInputCloud(cloud);
         seg.segment(*inliers, *coefficients);
+        plane_coefficients.push_back(*coefficients);
         // filter the segmented plane from cloud
         pcl::ExtractIndices<pcl::PointXYZ> extract;
         extract.setInputCloud(cloud);
@@ -123,17 +136,58 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
     for (std::vector<pcl::PointIndices>::const_iterator cluster_it = cluster_indices.begin (); cluster_it!= cluster_indices.end (); ++cluster_it)
     {
         jeff_segment_objects::Cluster cluster;
-        for (std::vector<int>::const_iterator point_it = cluster_it->indices.begin (); point_it != cluster_it->indices.end (); ++point_it)
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cluster_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+
+        for (std::vector<int>::const_iterator point_it = cluster_it->indices.begin (); point_it != cluster_it->indices.end (); ++point_it) {
             cluster.indices.push_back(root_indices->indices[*point_it]);
+            cluster_cloud->points.push_back(cloud->points[*point_it]);
+        }
+
+        // get 3D info about the object (taken from fy16m3aa@leeds.ac.uk)
+        // setup cloud for 3D calculations
+        cluster_cloud->width = cluster_cloud->points.size();
+        cluster_cloud->height = 1;
+        cluster_cloud->is_dense = true;
+
+        // calculate object center point
+        pcl::PointXYZ object_centroid;
+        pcl::computeCentroid(*cluster_cloud, object_centroid);
+        cluster.position.header.stamp = req.cloud_msg.header.stamp;
+        cluster.position.header.frame_id = "base_footprint";
+        cluster.position.point.x = object_centroid.x;
+        cluster.position.point.y = object_centroid.y;
+        cluster.position.point.z = object_centroid.z;
+
+        // get size of object
+        pcl::PointXYZ object_min, object_max;
+        pcl::getMinMax3D(*cluster_cloud, object_min, object_max);
+        cluster.size.x = std::abs(object_max.x - object_min.x);
+        cluster.size.y = std::abs(object_max.y - object_min.y);
+        cluster.size.z = std::abs(object_max.z - object_min.z);
+
+
+
 
         res.clusters.push_back(cluster);
     }
+    // do the same for planes
+    for (std::vector<pcl::ModelCoefficients>::const_iterator plane_it = plane_coefficients.begin (); plane_it!= plane_coefficients.end (); ++plane_it)
+    {
+        jeff_segment_objects::Plane plane;
+        for (std::vector<float>::const_iterator coefficient_it = plane_it->values.begin (); coefficient_it != plane_it->values.end (); ++coefficient_it)
+            plane.coefficients.push_back(*coefficient_it);
+
+        res.planes.push_back(plane);
+    }
+    
     return true;
 }
 
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "segment_objects");
+    listener = new tf::TransformListener();
+    ros::Duration(2).sleep();
     ros::NodeHandle n;
     ros::ServiceServer service = n.advertiseService("segment_objects", segment_objects);
     ros::spin();

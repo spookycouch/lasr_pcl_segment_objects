@@ -51,7 +51,6 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointCloud<pcl::PointXYZ>::Ptr nan_filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointIndices::Ptr root_indices(new pcl::PointIndices);
-    std::vector<pcl::ModelCoefficients> plane_coefficients;
 
 
     // convert ros cloud_msg input 
@@ -80,7 +79,6 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
     // segment planes from cloud
     seg.setInputCloud(cloud);
     seg.segment(*inliers, *coefficients);
-    plane_coefficients.push_back(*coefficients);
     // filter the segmented plane from cloud
     pcl::ExtractIndices<pcl::PointXYZ> extract;
     extract.setInputCloud(cloud);
@@ -101,7 +99,6 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
         // segment planes from cloud
         seg.setInputCloud(cloud);
         seg.segment(*inliers, *coefficients);
-        plane_coefficients.push_back(*coefficients);
         // filter the segmented plane from cloud
         pcl::ExtractIndices<pcl::PointXYZ> extract;
         extract.setInputCloud(cloud);
@@ -154,11 +151,11 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
         // calculate object center point
         pcl::PointXYZ object_centroid;
         pcl::computeCentroid(*cluster_cloud, object_centroid);
-        cluster.position.header.stamp = req.cloud_msg.header.stamp;
-        cluster.position.header.frame_id = "base_footprint";
-        cluster.position.point.x = object_centroid.x;
-        cluster.position.point.y = object_centroid.y;
-        cluster.position.point.z = object_centroid.z;
+        cluster.header.stamp = req.cloud_msg.header.stamp;
+        cluster.header.frame_id = "base_footprint";
+        cluster.point.x = object_centroid.x;
+        cluster.point.y = object_centroid.y;
+        cluster.point.z = object_centroid.z;
 
         // get size of object
         pcl::PointXYZ object_min, object_max;
@@ -167,19 +164,7 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
         cluster.size.y = std::abs(object_max.y - object_min.y);
         cluster.size.z = std::abs(object_max.z - object_min.z);
 
-
-
-
         res.clusters.push_back(cluster);
-    }
-    // do the same for planes
-    for (std::vector<pcl::ModelCoefficients>::const_iterator plane_it = plane_coefficients.begin (); plane_it!= plane_coefficients.end (); ++plane_it)
-    {
-        jeff_segment_objects::Plane plane;
-        for (std::vector<float>::const_iterator coefficient_it = plane_it->values.begin (); coefficient_it != plane_it->values.end (); ++coefficient_it)
-            plane.coefficients.push_back(*coefficient_it);
-
-        res.planes.push_back(plane);
     }
     
     return true;

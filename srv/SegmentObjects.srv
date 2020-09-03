@@ -3,4 +3,3 @@ float32 non_planar_ratio
 float32 cluster_tolerance
 ---
 Cluster[] clusters
-Plane[] planes

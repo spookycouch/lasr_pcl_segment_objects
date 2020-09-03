@@ -3,6 +3,11 @@
 #include <pcl_ros/transforms.h>
 #include <sensor_msgs/PointCloud2.h>
 
+#include <jeff_segment_objects/Cluster.h>
+#include <jeff_segment_objects/Plane.h>
+#include <jeff_segment_objects/SegmentObjects.h>
+#include <jeff_segment_objects/RemoveBox.h>
+
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/ModelCoefficients.h>
@@ -15,10 +20,7 @@
 #include <pcl/segmentation/extract_clusters.h>
 #include <pcl/features/normal_3d.h>
 #include <pcl/filters/project_inliers.h>
-
-#include <jeff_segment_objects/Cluster.h>
-#include <jeff_segment_objects/Plane.h>
-#include <jeff_segment_objects/SegmentObjects.h>
+#include <pcl/filters/conditional_removal.h>
 
 // transform listener to project objects onto base_footprint
 tf::TransformListener* listener;
@@ -183,12 +185,59 @@ bool segment_objects(jeff_segment_objects::SegmentObjects::Request &req, jeff_se
     return true;
 }
 
+bool remove_box(jeff_segment_objects::RemoveBox::Request &req, jeff_segment_objects::RemoveBox::Response &res) {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr xtion_frame_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr nan_filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+
+    // convert ros cloud_msg input 
+    pcl::fromROSMsg(req.points, *xtion_frame_cloud);
+    pcl_ros::transformPointCloud("/base_footprint", *xtion_frame_cloud, *cloud, *listener);
+
+    // remove nans
+    std::vector<int> nan_indices;
+    pcl::removeNaNFromPointCloud(*cloud, *nan_filtered_cloud, nan_indices);
+    cloud.swap(nan_filtered_cloud);
+
+    // set conditions
+    pcl::ConditionOr<pcl::PointXYZ>::Ptr range_cond (new pcl::ConditionOr<pcl::PointXYZ> ());
+    
+    range_cond->addComparison (pcl::FieldComparison<pcl::PointXYZ>::ConstPtr (new
+        pcl::FieldComparison<pcl::PointXYZ> ("x", pcl::ComparisonOps::GT, req.max.x + req.padding)));
+    range_cond->addComparison (pcl::FieldComparison<pcl::PointXYZ>::ConstPtr (new
+        pcl::FieldComparison<pcl::PointXYZ> ("y", pcl::ComparisonOps::GT, req.max.y + req.padding)));
+    range_cond->addComparison (pcl::FieldComparison<pcl::PointXYZ>::ConstPtr (new
+        pcl::FieldComparison<pcl::PointXYZ> ("z", pcl::ComparisonOps::GT, req.max.z + req.padding)));
+    range_cond->addComparison (pcl::FieldComparison<pcl::PointXYZ>::ConstPtr (new
+        pcl::FieldComparison<pcl::PointXYZ> ("x", pcl::ComparisonOps::LT, req.min.x - req.padding)));
+    range_cond->addComparison (pcl::FieldComparison<pcl::PointXYZ>::ConstPtr (new
+        pcl::FieldComparison<pcl::PointXYZ> ("y", pcl::ComparisonOps::LT, req.min.y - req.padding)));
+    range_cond->addComparison (pcl::FieldComparison<pcl::PointXYZ>::ConstPtr (new
+        pcl::FieldComparison<pcl::PointXYZ> ("z", pcl::ComparisonOps::LT, req.min.z - req.padding)));
+
+    // build the filter
+    pcl::ConditionalRemoval<pcl::PointXYZ> condrem;
+    condrem.setCondition (range_cond);
+    condrem.setInputCloud (cloud);
+    condrem.setKeepOrganized(true);
+    condrem.filter (*filtered_cloud);
+
+    cloud.swap(filtered_cloud);
+
+    pcl::toROSMsg(*cloud, res.points);
+
+    return true;
+}
+
+
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "segment_objects");
     listener = new tf::TransformListener();
     ros::Duration(2).sleep();
     ros::NodeHandle n;
-    ros::ServiceServer service = n.advertiseService("segment_objects", segment_objects);
+    ros::ServiceServer segment_service = n.advertiseService("segment_objects", segment_objects);
+    ros::ServiceServer remove_service = n.advertiseService("remove_box", remove_box);
     ros::spin();
 }
